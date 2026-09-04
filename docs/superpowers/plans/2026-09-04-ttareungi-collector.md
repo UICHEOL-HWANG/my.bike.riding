@@ -575,19 +575,42 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'collector.api'`
 - [ ] **Step 3: 구현**
 
 ```python
-# collector/api.py
+# collector/api.py (2026-09-05 최종 점검 반영본 — 초판 이후 XML 폴백,
+# 중첩 dict 방어, INFO-200 빈 페이지 처리, row 단일 객체 방어, 키 노출
+# 방지, 재시도 가시성이 추가됐다)
+import re
+import sys
 import time
 
 import requests
 
 BASE = "http://openapi.seoul.go.kr:8088"
 OK_CODE = "INFO-000"
+# 요청한 범위에 대여소가 없다는 뜻이다. 실패가 아니라 빈 페이지로 본다 —
+# 대여소 수가 정확히 page_size의 배수일 때 마지막 페이지가 이 코드로 온다.
+NO_DATA_CODE = "INFO-200"
 TIMEOUT = 10
 RETRY_WAITS = (1, 2, 4)
+
+# 인증키 오류 등 API가 XML로 돌려주는 실패 응답에서 CODE/MESSAGE를 뽑아낸다.
+_XML_CODE_RE = re.compile(r"<CODE>(.*?)</CODE>", re.IGNORECASE | re.DOTALL)
+_XML_MESSAGE_RE = re.compile(r"<MESSAGE>(.*?)</MESSAGE>", re.IGNORECASE | re.DOTALL)
 
 
 class SeoulApiError(Exception):
     pass
+
+
+def _xml_error(text: str) -> tuple[str, str] | None:
+    """본문이 XML 에러면 (code, message)를, 아니면 조용히 None을 준다."""
+    if not text:
+        return None
+    match = _XML_CODE_RE.search(text)
+    if not match:
+        return None
+    message_match = _XML_MESSAGE_RE.search(text)
+    message = message_match.group(1).strip() if message_match else ""
+    return match.group(1).strip(), message
 
 
 def fetch_page(
@@ -601,22 +624,48 @@ def fetch_page(
         try:
             resp = get(url, timeout=TIMEOUT)
             resp.raise_for_status()
-            payload = resp.json().get("rentBikeStatus") or {}
+            try:
+                data = resp.json()
+            except ValueError:
+                xml_error = _xml_error(resp.text)
+                if xml_error is not None:
+                    code, message = xml_error
+                    raise SeoulApiError(f"API가 {code}를 반환했다: {message}")
+                raise
+            if not isinstance(data, dict):
+                raise SeoulApiError(f"응답 본문이 객체가 아니다: {data!r}")
+            payload = data.get("rentBikeStatus")
+            if not isinstance(payload, dict):
+                raise SeoulApiError(f"rentBikeStatus가 객체가 아니다: {payload!r}")
             code = (payload.get("RESULT") or {}).get("CODE")
+            if code == NO_DATA_CODE:
+                return []
             if code != OK_CODE:
                 message = (payload.get("RESULT") or {}).get("MESSAGE", "")
-                # 인증키 오류·쿼터 초과는 재시도해도 낫지 않으므로 즉시 올린다.
                 raise SeoulApiError(f"API가 {code}를 반환했다: {message}")
-            return list(payload.get("row") or [])
+            row = payload.get("row")
+            if isinstance(row, dict):
+                # 단일 원소면 배열 대신 객체 하나로 오는 응답이 있다.
+                return [row]
+            if isinstance(row, list):
+                return row
+            return []
         except SeoulApiError:
             raise
         except (requests.RequestException, ValueError) as exc:
             last_error = exc
             if wait is None:
                 break
+            # url에는 인증키가 있어 타입 이름만 남긴다.
+            print(
+                f"{start}~{end} 호출 실패({type(exc).__name__}), {wait}초 후 재시도",
+                file=sys.stderr,
+            )
             time.sleep(wait)
 
-    raise SeoulApiError(f"{start}~{end} 호출이 재시도 후에도 실패했다: {last_error}")
+    # last_error를 문자열 그대로 박으면 요청 url(=키 포함)이 stderr까지 샌다.
+    error_kind = type(last_error).__name__ if last_error is not None else "알 수 없음"
+    raise SeoulApiError(f"{start}~{end} 호출이 재시도 후에도 실패했다: {error_kind}")
 
 
 def fetch_all(
@@ -647,7 +696,9 @@ def fetch_all(
 - [ ] **Step 4: 통과 확인**
 
 Run: `uv run pytest tests/test_api.py -v`
-Expected: PASS (5 passed)
+Expected: PASS (초판 5개. 2026-09-05 최종 점검에서 XML 폴백·중첩 dict·
+INFO-200·row 단일 객체·키 노출 방지·재시도 가시성 테스트가 추가돼
+전체 스위트는 더 늘었다 — Task 6 Step 4 참조)
 
 재시도 테스트가 실제로 1초 이상 걸린다. 정상이다.
 
@@ -870,7 +921,9 @@ Expected: FAIL — `ImportError: cannot import name 'run'`
 - [ ] **Step 3: 구현**
 
 ```python
-# collector/__main__.py
+# collector/__main__.py (2026-09-05 최종 점검 반영본 — parking_cnt 전부
+# None 가드, station 마스터 적재 실패의 격리, 스냅샷 우선 적재 순서,
+# "전송 N행" 표현이 이후 수정 wave에서 추가됐다)
 import sys
 from datetime import datetime, timezone
 
@@ -891,11 +944,24 @@ def run(settings: Settings, *, now=None, fetch=None, client=None) -> int:
         raw_rows, settings.station_ids, captured_at, fetched_at
     )
 
-    # 부분 성공이라도 받은 데이터는 먼저 남긴다.
-    upsert_stations(client, stations)
-    count = upsert_snapshots(client, snapshots)
+    # 관심 대여소가 있는데도 parking_cnt가 전부 None이면 API 응답 형식이
+    # 바뀌었거나 transform.py의 필드명이 틀린 것이다. ignore_duplicates
+    # 때문에 한 번 적재하면 되돌릴 수 없으므로 아예 적재하지 않는다.
+    if snapshots and all(row["parking_cnt"] is None for row in snapshots):
+        print("실패: 응답에 parking_cnt가 있는 행이 하나도 없다.", file=sys.stderr)
+        return 1
 
-    print(f"captured_at={captured_at.isoformat()} 적재 {count}행 (응답 {len(raw_rows)}건)")
+    # 부분 성공이라도 받은 데이터는 먼저 남긴다.
+    # 재수집이 불가능한 스냅샷을 먼저 적재하고, 언제든 다시 채울 수 있는
+    # 대여소 마스터 정보를 그 다음에 적재한다. 마스터 적재가 실패해도
+    # 스냅샷은 이미 안전하게 적재됐으므로 여기서 예외를 삼키고 계속한다.
+    count = upsert_snapshots(client, snapshots)
+    try:
+        upsert_stations(client, stations)
+    except Exception as exc:
+        print(f"경고: 대여소 마스터 적재 실패(스냅샷은 이미 적재됨): {exc}", file=sys.stderr)
+
+    print(f"captured_at={captured_at.isoformat()} 전송 {count}행 (응답 {len(raw_rows)}건)")
 
     if error is not None:
         print(f"실패: {error}", file=sys.stderr)
@@ -921,7 +987,8 @@ if __name__ == "__main__":
 - [ ] **Step 4: 전체 테스트 통과 확인**
 
 Run: `uv run pytest -v`
-Expected: PASS (23 passed — config 3, transform 9, api 5, store 3, main 3)
+Expected: PASS (23 passed — config 3, transform 9, api 5, store 3, main 3.
+2026-09-05 최종 점검 수정 wave 이후 41 passed로 늘었다 — `uv run pytest -q`로 항상 실제 개수를 확인할 것)
 
 - [ ] **Step 5: 커밋**
 
