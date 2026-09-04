@@ -1,4 +1,5 @@
 import re
+import sys
 import time
 
 import requests
@@ -83,6 +84,12 @@ def fetch_page(
             last_error = exc
             if wait is None:
                 break
+            # 재시도를 조용히 하면 서서히 나빠지는 API가 건강한 API와 똑같이
+            # 보인다. 예외 타입 이름만 남긴다 — url에는 인증키가 들어있다.
+            print(
+                f"{start}~{end} 호출 실패({type(exc).__name__}), {wait}초 후 재시도",
+                file=sys.stderr,
+            )
             time.sleep(wait)
 
     # url에는 인증키가 들어있다. last_error를 그대로 문자열로 박으면

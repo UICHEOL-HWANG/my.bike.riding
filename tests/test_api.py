@@ -92,6 +92,19 @@ def test_일시적_오류는_재시도한다():
 
 
 @responses.activate
+def test_재시도마다_한_줄을_stderr에_알린다(monkeypatch, capsys):
+    monkeypatch.setattr("collector.api.time.sleep", lambda _seconds: None)
+    responses.add(responses.GET, url(1, 1000), status=500)
+    responses.add(responses.GET, url(1, 1000), status=500)
+    responses.add(responses.GET, url(1, 1000), json=body(make_rows(1)), status=200)
+
+    fetch_page(KEY, 1, 1000)
+
+    err_lines = [line for line in capsys.readouterr().err.splitlines() if line]
+    assert len(err_lines) == 2, "실패한 시도 2번마다 한 줄씩 알려야 한다"
+
+
+@responses.activate
 def test_재시도가_모두_실패해도_키가_메시지에_남지_않는다(monkeypatch):
     monkeypatch.setattr("collector.api.time.sleep", lambda _seconds: None)
     for _ in range(4):
@@ -117,6 +130,30 @@ def test_XML_에러_본문도_판독한다():
         fetch_page(KEY, 1, 1000)
 
     assert len(responses.calls) == 1, "인증키 오류는 재시도하지 않는다"
+
+
+@responses.activate
+def test_빈_본문은_XML_에러로_보지_않고_재시도한다(monkeypatch):
+    monkeypatch.setattr("collector.api.time.sleep", lambda _seconds: None)
+    responses.add(responses.GET, url(1, 1000), body="", status=200, content_type="text/plain")
+    responses.add(responses.GET, url(1, 1000), json=body(make_rows(1)), status=200)
+
+    assert len(fetch_page(KEY, 1, 1000)) == 1
+
+
+@responses.activate
+def test_CODE_닫는_태그가_없는_XML도_재시도한다(monkeypatch):
+    monkeypatch.setattr("collector.api.time.sleep", lambda _seconds: None)
+    responses.add(
+        responses.GET,
+        url(1, 1000),
+        body="<RESULT><CODE>INFO-100",
+        status=200,
+        content_type="application/xml",
+    )
+    responses.add(responses.GET, url(1, 1000), json=body(make_rows(1)), status=200)
+
+    assert len(fetch_page(KEY, 1, 1000)) == 1
 
 
 @responses.activate
