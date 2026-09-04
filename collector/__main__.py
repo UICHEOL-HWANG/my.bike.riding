@@ -35,9 +35,15 @@ def run(settings: Settings, *, now=None, fetch=None, client=None) -> int:
     # 재수집이 불가능한 스냅샷을 먼저 적재하고, 언제든 다시 채울 수 있는
     # 대여소 마스터 정보를 그 다음에 적재한다.
     count = upsert_snapshots(client, snapshots)
-    upsert_stations(client, stations)
+    try:
+        upsert_stations(client, stations)
+    except Exception as exc:  # noqa: BLE001 - 이름·좌표 갱신 실패는 치명적이지 않다.
+        # station 마스터는 언제든 다음 실행에서 다시 채울 수 있다. 여기서 예외가
+        # 새면 이미 안전하게 적재한 스냅샷과 정상적인 종료 코드 판단까지
+        # 가로막혀, 겉치레 수준의 실패가 전체 수집 실패처럼 보인다.
+        print(f"경고: 대여소 마스터 적재 실패(스냅샷은 이미 적재됨): {exc}", file=sys.stderr)
 
-    print(f"captured_at={captured_at.isoformat()} 적재 {count}행 (응답 {len(raw_rows)}건)")
+    print(f"captured_at={captured_at.isoformat()} 전송 {count}행 (응답 {len(raw_rows)}건)")
 
     if error is not None:
         print(f"실패: {error}", file=sys.stderr)
