@@ -5,6 +5,9 @@ import requests
 
 BASE = "http://openapi.seoul.go.kr:8088"
 OK_CODE = "INFO-000"
+# 요청한 범위에 대여소가 없다는 뜻이다. 실패가 아니라 빈 페이지로 본다 —
+# 대여소 수가 정확히 page_size의 배수일 때 마지막 페이지가 이 코드로 온다.
+NO_DATA_CODE = "INFO-200"
 TIMEOUT = 10
 RETRY_WAITS = (1, 2, 4)
 
@@ -59,6 +62,8 @@ def fetch_page(
             if not isinstance(payload, dict):
                 raise SeoulApiError(f"rentBikeStatus가 객체가 아니다: {payload!r}")
             code = (payload.get("RESULT") or {}).get("CODE")
+            if code == NO_DATA_CODE:
+                return []
             if code != OK_CODE:
                 message = (payload.get("RESULT") or {}).get("MESSAGE", "")
                 # 인증키 오류·쿼터 초과는 재시도해도 낫지 않으므로 즉시 올린다.

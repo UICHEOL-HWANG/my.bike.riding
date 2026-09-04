@@ -58,6 +58,19 @@ def test_페이지가_가득_차지_않으면_거기서_멈춘다():
 
 
 @responses.activate
+def test_대여소_수가_정확히_페이지_경계면_INFO_200을_빈_페이지로_본다():
+    responses.add(responses.GET, url(1, 1000), json=body(make_rows(1000)), status=200)
+    responses.add(
+        responses.GET, url(1001, 2000), json=body([], code="INFO-200"), status=200
+    )
+
+    rows, error = fetch_all(KEY)
+
+    assert len(rows) == 1000
+    assert error is None
+
+
+@responses.activate
 def test_중간에_실패해도_받은_만큼은_돌려준다():
     responses.add(responses.GET, url(1, 1000), json=body(make_rows(1000)), status=200)
     responses.add(
