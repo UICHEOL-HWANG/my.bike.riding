@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from collector.transform import build_rows, floor_to_grid, to_int
+from collector.transform import build_rows, floor_to_grid, to_float, to_int
 
 KST_ROW = {
     "stationId": "ST-4",
@@ -37,6 +37,23 @@ def test_숫자가_아니면_None을_준다():
     assert to_int("") is None
     assert to_int(None) is None
     assert to_int("없음") is None
+
+
+def test_to_float_문자열_숫자를_실수로_바꾼다():
+    assert to_float("37.5") == 37.5
+    assert to_float(37.5) == 37.5
+
+
+def test_to_float_숫자가_아니면_None을_준다():
+    assert to_float("") is None
+    assert to_float(None) is None
+    assert to_float("없음") is None
+
+
+def test_to_float_유한하지_않은_값은_None을_준다():
+    assert to_float("nan") is None
+    assert to_float("inf") is None
+    assert to_float("-inf") is None
 
 
 def test_관심_대여소만_남긴다():

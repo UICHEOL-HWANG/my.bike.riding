@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 
 
@@ -21,9 +22,12 @@ def to_int(value: object) -> int | None:
 
 def to_float(value: object) -> float | None:
     try:
-        return float(str(value).strip())
+        result = float(str(value).strip())
     except (TypeError, ValueError):
         return None
+    # "nan"/"inf"도 float()엔 성공하지만 JSON에 없는 값이라 그대로 두면
+    # station 배치 전체가 Supabase 적재 시 거부된다.
+    return result if math.isfinite(result) else None
 
 
 def build_rows(
