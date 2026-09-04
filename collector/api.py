@@ -53,6 +53,8 @@ def fetch_page(
                     # 인증키 오류·쿼터 초과는 재시도해도 낫지 않으므로 즉시 올린다.
                     raise SeoulApiError(f"API가 {code}를 반환했다: {message}")
                 raise
+            if not isinstance(data, dict):
+                raise SeoulApiError(f"응답 본문이 객체가 아니다: {data!r}")
             payload = data.get("rentBikeStatus") or {}
             code = (payload.get("RESULT") or {}).get("CODE")
             if code != OK_CODE:
