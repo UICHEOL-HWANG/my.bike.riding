@@ -103,6 +103,14 @@ def test_최상위가_객체가_아닌_JSON도_SeoulApiError로_바꾼다():
 
 
 @responses.activate
+def test_rentBikeStatus가_객체가_아니어도_SeoulApiError로_바꾼다():
+    responses.add(responses.GET, url(1, 1000), json={"rentBikeStatus": "에러"}, status=200)
+
+    with pytest.raises(SeoulApiError):
+        fetch_page(KEY, 1, 1000)
+
+
+@responses.activate
 def test_fetch_all은_어떤_경우에도_예외를_던지지_않는다():
     responses.add(responses.GET, url(1, 1000), json="문자열 본문", status=200)
 

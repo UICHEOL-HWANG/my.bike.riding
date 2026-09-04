@@ -55,7 +55,9 @@ def fetch_page(
                 raise
             if not isinstance(data, dict):
                 raise SeoulApiError(f"응답 본문이 객체가 아니다: {data!r}")
-            payload = data.get("rentBikeStatus") or {}
+            payload = data.get("rentBikeStatus")
+            if not isinstance(payload, dict):
+                raise SeoulApiError(f"rentBikeStatus가 객체가 아니다: {payload!r}")
             code = (payload.get("RESULT") or {}).get("CODE")
             if code != OK_CODE:
                 message = (payload.get("RESULT") or {}).get("MESSAGE", "")
