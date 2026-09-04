@@ -92,6 +92,18 @@ def test_일시적_오류는_재시도한다():
 
 
 @responses.activate
+def test_재시도가_모두_실패해도_키가_메시지에_남지_않는다(monkeypatch):
+    monkeypatch.setattr("collector.api.time.sleep", lambda _seconds: None)
+    for _ in range(4):
+        responses.add(responses.GET, url(1, 1000), status=500)
+
+    with pytest.raises(SeoulApiError) as exc_info:
+        fetch_page(KEY, 1, 1000)
+
+    assert KEY not in str(exc_info.value)
+
+
+@responses.activate
 def test_XML_에러_본문도_판독한다():
     responses.add(
         responses.GET,

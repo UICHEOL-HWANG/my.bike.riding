@@ -77,7 +77,12 @@ def fetch_page(
                 break
             time.sleep(wait)
 
-    raise SeoulApiError(f"{start}~{end} 호출이 재시도 후에도 실패했다: {last_error}")
+    # url에는 인증키가 들어있다. last_error를 그대로 문자열로 박으면
+    # requests의 예외 메시지(예: raise_for_status)에 딸려온 요청 url이
+    # 이 메시지를 거쳐 stderr, 나아가 공개 저장소의 Actions 로그까지 간다.
+    # 예외 타입 이름만 남기고 원본 예외는 버린다.
+    error_kind = type(last_error).__name__ if last_error is not None else "알 수 없음"
+    raise SeoulApiError(f"{start}~{end} 호출이 재시도 후에도 실패했다: {error_kind}")
 
 
 def fetch_all(
