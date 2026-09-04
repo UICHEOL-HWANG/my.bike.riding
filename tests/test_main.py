@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from collector.api import SeoulApiError
@@ -60,3 +61,25 @@ def test_부분_성공은_적재하되_실패로_끝난다():
 
     assert code == 1
     assert client.calls, "받은 데이터는 적재해야 한다"
+
+
+def test_parking_cnt가_전부_None이면_실패로_끝나고_적재하지_않는다():
+    client = FakeClient()
+    broken_row = {**ROW, "parkingBikeTotCnt": "필드명이_바뀜"}
+
+    code = run(SETTINGS, now=NOW, fetch=lambda key: ([broken_row], None), client=client)
+
+    assert code == 1
+    assert client.calls == [], "전부 None인 스냅샷은 적재하면 안 된다"
+
+
+def test_일부_대여소만_parking_cnt가_None이면_성공으로_끝난다():
+    client = FakeClient()
+    settings = replace(SETTINGS, station_ids=frozenset({"ST-4", "ST-5"}))
+    row_missing = {**ROW, "stationId": "ST-5", "parkingBikeTotCnt": "없음"}
+
+    code = run(
+        settings, now=NOW, fetch=lambda key: ([ROW, row_missing], None), client=client
+    )
+
+    assert code == 0
