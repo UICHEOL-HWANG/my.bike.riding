@@ -147,7 +147,7 @@ git commit -m "프로젝트 초기화와 실제 API 응답 픽스처 확보
 - Produces:
   - `Settings` — frozen dataclass: `seoul_api_key: str`, `supabase_url: str`, `supabase_service_key: str`, `station_ids: frozenset[str]`, `grid_minutes: int`
   - `load_station_ids(path: Path) -> frozenset[str]`
-  - `load_settings(stations_path: Path = Path("stations.yml")) -> Settings`
+  - `load_settings(stations_path: Path = Path("stations.yml"), *, load_env: bool = True) -> Settings`
 
 - [ ] **Step 1: 실패하는 테스트 작성**
 
@@ -182,8 +182,9 @@ def test_키가_없으면_에러를_낸다(tmp_path, monkeypatch):
     p = tmp_path / "stations.yml"
     p.write_text("main: [ST-4]\nfallback: []\n", encoding="utf-8")
 
+    # load_env=False가 없으면 로컬 .env가 지운 변수를 도로 채워 테스트가 환경을 탄다.
     with pytest.raises(ValueError, match="SEOUL_API_KEY"):
-        load_settings(p)
+        load_settings(p, load_env=False)
 ```
 
 빈 목록에서 에러를 내는 이유: 목록이 비면 수집기는 매 실행 0행을 적재하고, 사람이 눈치채기까지 며칠이 그냥 지나간다.
@@ -236,8 +237,12 @@ def _require_env(name: str) -> str:
     return value
 
 
-def load_settings(stations_path: Path = Path("stations.yml")) -> Settings:
-    load_dotenv()
+def load_settings(
+    stations_path: Path = Path("stations.yml"), *, load_env: bool = True
+) -> Settings:
+    # 테스트는 load_env=False로 부른다. 로컬 .env가 테스트 환경을 오염시키지 않도록.
+    if load_env:
+        load_dotenv()
     return Settings(
         seoul_api_key=_require_env("SEOUL_API_KEY"),
         supabase_url=_require_env("SUPABASE_URL"),
@@ -916,7 +921,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: 전체 테스트 통과 확인**
 
 Run: `uv run pytest -v`
-Expected: PASS (20 passed)
+Expected: PASS (23 passed — config 3, transform 9, api 5, store 3, main 3)
 
 - [ ] **Step 5: 커밋**
 
