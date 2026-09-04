@@ -1,7 +1,7 @@
 [project]
 name = "my-bike-riding"
 version = "0.1.0"
-description = "Add your description here"
+description = "서울시 공공자전거 실시간 대여정보를 10분마다 수집해 Supabase에 적재하는 수집기"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

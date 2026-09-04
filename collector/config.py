@@ -7,6 +7,10 @@ from dotenv import load_dotenv
 
 GRID_MINUTES = 10
 
+# collector/config.py 기준 저장소 루트. CWD가 어디든(예: cron이 다른
+# 디렉터리에서 실행) stations.yml 기본 경로가 흔들리지 않게 한다.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -38,7 +42,7 @@ def _require_env(name: str) -> str:
 
 
 def load_settings(
-    stations_path: Path = Path("stations.yml"), *, load_env: bool = True
+    stations_path: Path = _REPO_ROOT / "stations.yml", *, load_env: bool = True
 ) -> Settings:
     # 테스트는 load_env=False로 부른다. 로컬 .env가 테스트 환경을 오염시키지 않도록.
     if load_env:
