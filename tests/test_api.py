@@ -136,6 +136,17 @@ def test_rentBikeStatus가_객체가_아니어도_SeoulApiError로_바꾼다():
 
 
 @responses.activate
+def test_row가_단일_객체로_와도_한_건으로_본다():
+    responses.add(
+        responses.GET, url(1, 1000), json=body({"stationId": "ST-4"}), status=200
+    )
+
+    rows = fetch_page(KEY, 1, 1000)
+
+    assert rows == [{"stationId": "ST-4"}]
+
+
+@responses.activate
 def test_fetch_all은_어떤_경우에도_예외를_던지지_않는다():
     responses.add(responses.GET, url(1, 1000), json="문자열 본문", status=200)
 

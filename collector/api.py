@@ -68,7 +68,15 @@ def fetch_page(
                 message = (payload.get("RESULT") or {}).get("MESSAGE", "")
                 # 인증키 오류·쿼터 초과는 재시도해도 낫지 않으므로 즉시 올린다.
                 raise SeoulApiError(f"API가 {code}를 반환했다: {message}")
-            return list(payload.get("row") or [])
+            row = payload.get("row")
+            if isinstance(row, dict):
+                # 일부 서울시 API 응답은 원소가 하나면 배열 대신 객체 하나로
+                # 온다. list(dict)는 그 dict의 키 목록을 돌려주는 함정이라
+                # 명시적으로 감싼다.
+                return [row]
+            if isinstance(row, list):
+                return row
+            return []
         except SeoulApiError:
             raise
         except (requests.RequestException, ValueError) as exc:
