@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.uicheol.ttareungi-rides</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/uicheol_hwang/my.bike.riding/scripts/run_my_rides.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/uicheol_hwang/my.bike.riding</string>
+
+  <!-- 매주 일요일 12:00. 이용내역은 계정에 남아 사라지지 않으므로
+       정확한 시각이 중요하지 않다. 맥이 꺼져 있었으면 깨어날 때 돈다. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key><integer>0</integer>
+    <key>Hour</key><integer>12</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+
+  <!-- 로그인할 때마다 돌 이유가 없다. 예약된 시각에만 돈다. -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/Users/uicheol_hwang/Library/Logs/ttareungi/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/uicheol_hwang/Library/Logs/ttareungi/launchd.err.log</string>
+</dict>
+</plist>
