@@ -57,9 +57,8 @@ gh run list --workflow=collect --limit 5   # 스케줄 실행 상태
 ## 정해진 것
 
 - 수집 간격 **10분** / 관심 대여소 **14곳**(`stations.yml`, 본인 이용내역 168건의 빈도로 도출)
-- 대여내역은 **주 1회 GitHub Actions**로 자동화(`.github/workflows/rides.yml`). 브라우저가 필요해 pg_cron으로는 못 한다. 조회 상한이 있어 6개월 창으로 나눠 받는다
-  - 주 1회라 Actions cron의 약점이 문제가 안 된다. 재고 수집이 `*/10`에서 실패한 건 하루 144번 떠야 했기 때문이고, GitHub은 고빈도 스케줄을 후순위로 민다
-  - 이 워크플로만 따릉이 계정 자격증명을 GitHub secrets에 둔다. 로컬 `launchd` 안이 대안이었으나 사용자가 Actions를 선택했다. 되돌리려면 `scripts/com.uicheol.ttareungi-rides.plist`
+- 대여내역은 **주 1회 로컬 `launchd`**로 자동화(`scripts/com.uicheol.ttareungi-rides.plist`). 브라우저가 필요해 pg_cron으로는 못 한다. 조회 상한이 있어 6개월 창으로 나눠 받는다
+- **GitHub Actions로는 불가능하다 — 실측으로 확인했다.** 따릉이 WAF가 러너 IP(미국 Azure)를 차단해 로그인 페이지 자체가 407바이트 차단 안내로 온다. 프록시·VPN 우회는 하지 않는다. 그래서 이 작업만 한국에서 도는 기계가 필요하다
 
 ## 다음 과제
 
