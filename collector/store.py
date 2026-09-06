@@ -38,3 +38,12 @@ def upsert_stations(client, rows: list[dict]) -> int:
         return 0
     client.table("station").upsert(rows, on_conflict="station_id").execute()
     return len(rows)
+
+
+def upsert_rides(client, rows: list[dict]) -> int:
+    """본인 이용내역. rent_hist_seq가 유일한 안정적 식별자다 —
+    대여일시는 같은 분에 두 건이 생길 수 있어 키로 쓸 수 없다."""
+    if not rows:
+        return 0
+    client.table("my_ride").upsert(rows, on_conflict="rent_hist_seq").execute()
+    return len(rows)
