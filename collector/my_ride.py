@@ -116,3 +116,44 @@ def fetch_all(session: requests.Session, start: date, end: date) -> list[dict]:
         for ride in fetch_window(session, w_start, w_end):
             merged[ride["rent_hist_seq"]] = ride
     return sorted(merged.values(), key=lambda r: r["rented_at"])
+
+
+# --- 브라우저 경로 ---------------------------------------------------
+# requests로는 서버가 연결을 끊는다(클라이언트 식별). 진짜 브라우저로
+# 같은 폼을 조작한다. page는 Playwright Page를 기대하지만 타입으로 묶지
+# 않는다 — 이 모듈이 playwright에 의존하면 파싱 테스트까지 무거워진다.
+
+
+def fetch_window_via_page(page, start: date, end: date) -> list[dict]:
+    """브라우저로 창 하나를 페이지 끝까지 받는다.
+
+    폼 값을 직접 넣고 사이트가 가진 제출 함수(own.exeUpdateList)를 부른다.
+    URL을 새로 만들지 않으므로 사이트가 파라미터를 바꿔도 따라간다.
+    """
+    seen: dict[str, dict] = {}
+    for page_no in range(1, MAX_PAGES + 1):
+        # 제출은 곧 페이지 이동이다. 이동을 기다리지 않고 내용을 읽으면
+        # "page is navigating" 에러가 난다.
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=30000):
+            page.evaluate(
+                """([s, e, n]) => {
+                    document.querySelector("[name='searchStartDate']").value = s;
+                    document.querySelector("[name='searchEndDate']").value = e;
+                    own.exeUpdateList(n);
+                }""",
+                [start.isoformat(), end.isoformat(), page_no],
+            )
+        fresh = [r for r in parse_rows(page.content()) if r["rent_hist_seq"] not in seen]
+        if not fresh:
+            break
+        for ride in fresh:
+            seen[ride["rent_hist_seq"]] = ride
+    return list(seen.values())
+
+
+def fetch_all_via_page(page, start: date, end: date) -> list[dict]:
+    merged: dict[str, dict] = {}
+    for w_start, w_end in iter_windows(start, end):
+        for ride in fetch_window_via_page(page, w_start, w_end):
+            merged[ride["rent_hist_seq"]] = ride
+    return sorted(merged.values(), key=lambda r: r["rented_at"])

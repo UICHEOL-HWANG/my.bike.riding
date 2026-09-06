@@ -1,44 +1,82 @@
-"""본인 이용내역을 받아 Supabase에 적재한다.
+"""본인 이용내역을 브라우저로 받아 Supabase에 적재한다.
+
+requests로는 서버가 연결을 끊는다(클라이언트 식별). 탐지를 회피하는 대신
+실제 브라우저를 쓴다 — 위장하지 않고 있는 그대로 접속한다.
 
 재고 수집기와 달리 상시로 돌 필요가 없다. 이용내역은 계정에 남아 있어
 사라지지 않으므로, 가끔 실행해 신규분만 붙이면 된다.
 
-    uv run python scripts/fetch_my_rides.py            # 기본: 최근 2년
-    uv run python scripts/fetch_my_rides.py 2023-01-01 # 시작일 지정
+    uv run python scripts/fetch_my_rides.py                  # 최근 2년
+    uv run python scripts/fetch_my_rides.py 2023-01-01       # 시작일 지정
+    uv run python scripts/fetch_my_rides.py 2023-01-01 --show # 창 띄우기
 """
+import json
 import os
 import pathlib
 import sys
 from datetime import date, timedelta
 
 from dotenv import load_dotenv
+from playwright.sync_api import sync_playwright
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from collector.bikeseoul import LoginError, session_from_cookie  # noqa: E402
-from collector.my_ride import fetch_all  # noqa: E402
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from collector.my_ride import fetch_all_via_page  # noqa: E402
 from collector.store import make_client, upsert_rides  # noqa: E402
+
+LOGIN = "https://www.bikeseoul.com/login.do"
+HISTORY = "https://www.bikeseoul.com/app/mybike/getMemberUseHistory.do"
 
 
 def main() -> int:
-    load_dotenv(pathlib.Path(__file__).resolve().parent.parent / ".env")
-
-    start = date.fromisoformat(sys.argv[1]) if len(sys.argv) > 1 else date.today() - timedelta(days=730)
+    load_dotenv(ROOT / ".env")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    start = date.fromisoformat(args[0]) if args else date.today() - timedelta(days=730)
     end = date.today()
 
-    try:
-        session = session_from_cookie(os.environ.get("BIKESEOUL_SESSION", "").strip())
-    except LoginError as exc:
-        print(f"[실패] {exc}")
+    user, pw = os.environ.get("BIKESEOUL_ID", ""), os.environ.get("BIKESEOUL_PW", "")
+    if not user or not pw:
+        print("[실패] .env에 BIKESEOUL_ID / BIKESEOUL_PW가 필요하다.")
         return 1
 
-    print(f"[조회] {start} ~ {end}")
-    rides = fetch_all(session, start, end)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless="--show" not in sys.argv)
+        page = browser.new_page(locale="ko-KR")
+
+        page.goto(LOGIN, wait_until="domcontentloaded")
+        page.fill("#memid", user)
+        page.fill("#mempw", pw)
+        with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
+            page.evaluate("loginSubmit()")
+        if "login.do" in page.url:
+            print(f"[실패] 로그인 거부됨 -> {page.url}")
+            browser.close()
+            return 1
+        print(f"[로그인] 성공 -> {page.url}")
+
+        page.goto(HISTORY, wait_until="domcontentloaded")
+        if "login.do" in page.url:
+            print("[실패] 내역 페이지 접근 불가")
+            browser.close()
+            return 1
+
+        print(f"[조회] {start} ~ {end}")
+        rides = fetch_all_via_page(page, start, end)
+        browser.close()
+
     if not rides:
-        # 세션 만료와 "정말 내역이 없음"은 다르다. 조용히 0건으로 넘기면
-        # 만료를 못 알아챈다.
-        print("[경고] 0건이다. 세션이 만료됐을 수 있다. BIKESEOUL_SESSION을 갱신할 것.")
+        # 세션 문제와 "정말 내역이 없음"은 다르다. 0건을 조용히 넘기면
+        # 무엇이 잘못됐는지 알 수 없다.
+        print("[경고] 0건이다. 조회 기간이나 페이지 구조를 확인할 것.")
         return 1
     print(f"[수집] {len(rides)}건 ({rides[0]['rented_at']} ~ {rides[-1]['rented_at']})")
+
+    # 적재가 실패해도 긁은 결과를 잃지 않는다. 브라우저로 수십 페이지를
+    # 도는 작업이라 다시 긁는 비용이 크다. 개인 이동기록이므로 저장소가
+    # 아니라 저장소 밖에 둔다.
+    dump = pathlib.Path(os.environ.get("RIDES_DUMP", "/tmp/rides_latest.json"))
+    dump.write_text(json.dumps(rides, ensure_ascii=False, indent=1), encoding="utf-8")
+    print(f"[백업] {dump}")
 
     client = make_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
     print(f"[적재] {upsert_rides(client, rides)}건 upsert")
