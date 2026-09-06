@@ -19,7 +19,10 @@ _URI = re.compile(r"^postgres(?:ql)?://([^:]+):(.*)@([^@/]+?)(?::(\d+))?/(.+)$")
 def parse_db_url(url: str) -> dict:
     m = _URI.match(url.strip())
     if not m:
-        raise ValueError("SUPABASE_DB_URL이 postgresql://user:pw@host:port/db 형식이 아니다.")
+        raise ValueError(
+            "SUPABASE_DB_URL 형식이 아니다. "
+            "postgresql 스킴, 사용자·비밀번호, 호스트, DB 이름이 모두 필요하다."
+        )
     user, password, host, port, dbname = m.groups()
     return {
         "user": user,
