@@ -49,3 +49,8 @@ alter table my_ride
   add column if not exists calories      double precision,
   add column if not exists carbon_kg     double precision,
   add column if not exists extra_fee     int;
+
+-- 백필분(시간 단위, bikeListHist)과 실측 스냅샷(10분)을 구분한다.
+-- 섞이면 나중에 어느 쪽인지 알 수 없다.
+alter table station_snapshot
+  add column if not exists source text not null default 'realtime';

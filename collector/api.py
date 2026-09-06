@@ -38,10 +38,23 @@ def _xml_error(text: str) -> tuple[str, str] | None:
 
 
 def fetch_page(
-    api_key: str, start: int, end: int, *, session: requests.Session | None = None
+    api_key: str,
+    start: int,
+    end: int,
+    *,
+    session: requests.Session | None = None,
+    service: str = "bikeList",
+    envelope: str = "rentBikeStatus",
+    suffix: str = "",
 ) -> list[dict]:
+    """서울시 열린데이터 한 페이지를 받는다.
+
+    과거 재고(bikeListHist)도 같은 규약을 쓴다 — 응답 봉투 이름과 URL
+    꼬리(stationDt)만 다르다. 재시도와 XML 에러 판독을 복제하지 않으려고
+    기본값을 둔 인자로 열어둔다.
+    """
     get = (session or requests).get
-    url = f"{BASE}/{api_key}/json/bikeList/{start}/{end}/"
+    url = f"{BASE}/{api_key}/json/{service}/{start}/{end}/{suffix}"
 
     last_error: Exception | None = None
     for wait in (*RETRY_WAITS, None):
@@ -59,9 +72,9 @@ def fetch_page(
                 raise
             if not isinstance(data, dict):
                 raise SeoulApiError(f"응답 본문이 객체가 아니다: {data!r}")
-            payload = data.get("rentBikeStatus")
+            payload = data.get(envelope)
             if not isinstance(payload, dict):
-                raise SeoulApiError(f"rentBikeStatus가 객체가 아니다: {payload!r}")
+                raise SeoulApiError(f"{envelope}가 객체가 아니다: {payload!r}")
             code = (payload.get("RESULT") or {}).get("CODE")
             if code == NO_DATA_CODE:
                 return []
