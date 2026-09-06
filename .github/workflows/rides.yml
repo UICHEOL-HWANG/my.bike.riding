@@ -34,9 +34,28 @@ jobs:
 
       - run: uv run playwright install --with-deps chromium
 
+      # 러너 IP에서 사이트가 어떻게 보이는지 먼저 남긴다. 한국 공공
+      # 서비스는 해외·데이터센터 IP를 막는 일이 있다.
+      - name: 접근 확인
+        run: |
+          echo "러너 위치:"; curl -s --max-time 10 https://ipinfo.io/json | head -20 || true
+          echo; echo "로그인 페이지 응답:"
+          curl -s -o /tmp/login.html -w 'status=%{http_code} size=%{size_download}\n' \
+            --max-time 20 https://www.bikeseoul.com/login.do || true
+          echo "memid 포함 여부: $(grep -c 'memid' /tmp/login.html || echo 0)"
+          head -c 400 /tmp/login.html
+
       - run: uv run python scripts/fetch_my_rides.py
         env:
           BIKESEOUL_ID: ${{ secrets.BIKESEOUL_ID }}
           BIKESEOUL_PW: ${{ secrets.BIKESEOUL_PW }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+
+      - name: 실패 시 화면 보존
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: login-page
+          path: login_page.png
+          if-no-files-found: ignore

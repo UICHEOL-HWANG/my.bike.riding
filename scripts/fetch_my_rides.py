@@ -44,6 +44,22 @@ def main() -> int:
         page = browser.new_page(locale="ko-KR")
 
         page.goto(LOGIN, wait_until="domcontentloaded")
+
+        # 로그인 폼이 없으면 우리가 아는 그 페이지가 아니다. 차단 페이지나
+        # 점검 안내일 수 있는데, "요소를 못 찾았다"는 타임아웃만으로는
+        # 무엇이 왔는지 알 수 없다. 실제로 받은 것을 남긴다.
+        if page.query_selector("#memid") is None:
+            body = page.inner_text("body")[:600].replace("\n", " | ")
+            print(f"[진단] 로그인 폼 없음")
+            print(f"  URL   : {page.url}")
+            print(f"  제목  : {page.title()}")
+            print(f"  크기  : {len(page.content())} bytes")
+            print(f"  본문  : {body}")
+            page.screenshot(path="login_page.png", full_page=True)
+            print("  스크린샷: login_page.png")
+            browser.close()
+            return 1
+
         page.fill("#memid", user)
         page.fill("#mempw", pw)
         with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
