@@ -39,3 +39,13 @@ create table if not exists my_ride (
   created_at      timestamptz default now()
 );
 create index if not exists my_ride_by_time on my_ride (rented_at);
+
+-- 상세 페이지(moveUseHistoryDetailView.do)에서 얻는 값.
+-- carbon_kg는 거리 x 0.232의 순수 파생값이라 정보량이 없다. 원본 보존용.
+-- calories는 대체로 거리 x 34지만 속도에 따라 어긋나는 건이 있다.
+-- duration_min은 사이트가 계산한 값이라 분 단위 타임스탬프 차이보다 정확하다.
+alter table my_ride
+  add column if not exists duration_min int,
+  add column if not exists calories      double precision,
+  add column if not exists carbon_kg     double precision,
+  add column if not exists extra_fee     int;

@@ -157,3 +157,58 @@ def fetch_all_via_page(page, start: date, end: date) -> list[dict]:
         for ride in fetch_window_via_page(page, w_start, w_end):
             merged[ride["rent_hist_seq"]] = ride
     return sorted(merged.values(), key=lambda r: r["rented_at"])
+
+
+# --- 상세 페이지 ------------------------------------------------------
+# 목록에 없는 값(이용시간·칼로리·탄소절감·추가과금)은 건별 상세에만 있다.
+# 재고 예측에는 쓰이지 않는다 — 라이딩 결과지 대여소 상태가 아니다.
+# 개인 기록 보존용이다.
+
+DETAIL_PATH = "/app/mybike/moveUseHistoryDetailView.do"
+
+_MIN = re.compile(r"(\d+)분")
+_KM = re.compile(r"([\d.]+)\s*km")
+_KCAL = re.compile(r"([\d.]+)\s*kcal")
+_KG = re.compile(r"([\d.]+)\s*kg")
+_FEE = re.compile(r"추가과금\s*\t?\s*([\d,]+)")
+
+
+def parse_detail(text: str) -> dict:
+    """상세 화면 텍스트에서 값을 뽑는다.
+
+    duration_min은 사이트가 계산한 값이라 대여/반납 타임스탬프(분 단위)
+    차이보다 정확하다. carbon_kg는 거리 x 0.232의 파생값이라 정보량이
+    없지만 원본 그대로 남긴다.
+    """
+
+    def num(pattern, cast=float):
+        m = pattern.search(text)
+        if not m:
+            return None
+        try:
+            return cast(m.group(1).replace(",", ""))
+        except ValueError:
+            return None
+
+    return {
+        "duration_min": num(_MIN, int),
+        "distance_km": num(_KM),
+        "calories": num(_KCAL),
+        "carbon_kg": num(_KG),
+        "extra_fee": num(_FEE, int),
+    }
+
+
+def fetch_detail_via_page(page, history_url: str, seq: str) -> dict:
+    """한 건의 상세를 연다. 목록 페이지의 폼을 상세로 돌려 제출한다."""
+    page.goto(history_url, wait_until="domcontentloaded")
+    with page.expect_navigation(wait_until="domcontentloaded", timeout=30000):
+        page.evaluate(
+            """([s, path]) => {
+                document.querySelector("[name='rentHistSeq']").value = s;
+                const f = document.querySelector("#searchFrm");
+                f.action = path; f.method = "post"; f.submit();
+            }""",
+            [seq, DETAIL_PATH],
+        )
+    return parse_detail(page.inner_text("body"))

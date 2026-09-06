@@ -139,3 +139,41 @@ def test_조회_파라미터를_형식대로_보낸다():
     assert session.calls[0]["searchStartDate"] == "2026-01-02"
     assert session.calls[0]["searchEndDate"] == "2026-07-03"
     assert session.calls[0]["currentPageNo"] == "1"
+
+
+DETAIL_TEXT = """조회된 기간의 운동량 및 탄소절감량입니다.
+14분
+1.50km
+38.59kcal
+0.35kg
+자전거	SPB-60434
+이용시간	14분 사용
+추가과금	0
+"""
+
+
+def test_상세에서_값을_뽑는다():
+    from collector.my_ride import parse_detail
+
+    assert parse_detail(DETAIL_TEXT) == {
+        "duration_min": 14,
+        "distance_km": 1.50,
+        "calories": 38.59,
+        "carbon_kg": 0.35,
+        "extra_fee": 0,
+    }
+
+
+def test_상세에_값이_없으면_None이다():
+    from collector.my_ride import parse_detail
+
+    assert parse_detail("빈 화면") == {
+        "duration_min": None, "distance_km": None,
+        "calories": None, "carbon_kg": None, "extra_fee": None,
+    }
+
+
+def test_추가과금에_쉼표가_있어도_읽는다():
+    from collector.my_ride import parse_detail
+
+    assert parse_detail("추가과금\t1,200")["extra_fee"] == 1200
