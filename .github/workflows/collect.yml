@@ -1,0 +1,35 @@
+# 10분마다 따릉이 재고 스냅샷을 수집한다.
+#
+# 실시간 API는 호출 시점만 주고 과거 조회가 없다. 이 워크플로가 안 도는
+# 동안의 재고는 영구히 복원할 수 없다 — 실패를 조용히 넘기면 안 되는 이유다.
+#
+# 주의: GitHub은 public 저장소에서 60일간 활동이 없으면 스케줄 워크플로를
+# 자동 비활성화한다. 이 수집기는 커밋할 일이 없는 코드라 정확히 여기 걸린다.
+# 대시보드에 "마지막 수집: N분 전"을 띄워 사람이 알아채는 것으로 우선 막는다.
+name: collect
+
+on:
+  schedule:
+    # Actions cron은 예약 시각보다 늦게 뜨는 일이 흔하다. captured_at을
+    # 10분 격자로 내림해 흡수하므로 지연 자체는 문제가 되지 않는다.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --frozen --no-dev
+
+      - run: uv run python -m collector
+        env:
+          SEOUL_API_KEY: ${{ secrets.SEOUL_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
