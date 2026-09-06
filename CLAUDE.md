@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 현재 상태
 
-**수집기가 가동 중이다** (2026-09-06~). GitHub Actions가 10분마다 `python -m collector`를 돌려 관심 대여소 14곳의 재고를 Supabase에 적재한다.
+**수집기가 가동 중이다** (2026-09-06~). Supabase `pg_cron`이 10분마다 서울시 API를 호출해 관심 대여소 14곳의 재고를 적재한다. 스케줄러는 [docs/scheduler.sql](docs/scheduler.sql), 파이썬 경로는 수동 실행·백필용으로 유지한다.
 
 ```bash
 uv run pytest                              # 테스트 (네트워크 불필요)
@@ -30,7 +30,8 @@ gh run list --workflow=collect --limit 5   # 스케줄 실행 상태
 ## 아키텍처 제약 (기존 개인 파이프라인 재사용)
 
 - DB는 Supabase, 대시보드는 GitHub Pages 정적, 원본은 JSON 스냅샷 그대로 아카이브
-- **별도 VM·데이터레이크는 도입하지 않는다.** 스케줄은 GitHub Actions cron으로 결정했다 — 예약 지연은 `captured_at`을 10분 격자로 내려 흡수한다
+- **별도 VM·데이터레이크는 도입하지 않는다.** 스케줄은 Supabase `pg_cron` + `pg_net`이다.
+- **GitHub Actions cron은 쓰지 않는다 — 실측으로 배제했다.** `*/10` 예약이 6시간 30분 동안 1회만 발화했다(약 3%). 격자 내림은 "지연"은 흡수해도 "누락"은 못 막는다. pg_cron은 같은 조건에서 오차 100ms 이내로 매번 발화한다. 워크플로는 `workflow_dispatch` 전용으로 남겨 비상 경로로만 쓴다
 - **크롤링도 도입하지 않는다.** 본인 이용내역만 예외인데, 이것도 로그인 자동화가 아니라 **사람이 브라우저에서 만든 세션을 재사용**한다(`BIKESEOUL_SESSION`). 자동 로그인은 실제로 시도했다가 봇 판별에 차단당했다. 한 달에 한 번 돌릴 스크립트를 위해 그걸 뚫을 이유가 없다
 - 실패가 조용히 방치되는 게 최악이다. 스케줄 등록과 실패 알림은 세트로 간다
 

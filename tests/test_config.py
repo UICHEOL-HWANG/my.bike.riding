@@ -30,3 +30,33 @@ def test_키가_없으면_에러를_낸다(tmp_path, monkeypatch):
     # load_env=False가 없으면 로컬 .env가 지운 변수를 도로 채워 테스트가 환경을 탄다.
     with pytest.raises(ValueError, match="SEOUL_API_KEY"):
         load_settings(p, load_env=False)
+
+
+def test_비밀번호에_슬래시가_있어도_쪼갠다():
+    # Supabase가 만드는 비밀번호에 '/'가 섞이면 URI 파서가 호스트 경계를
+    # 잘못 잡는다. 실제로 이 프로젝트에서 겪은 경우다.
+    from collector.db import parse_db_url
+
+    got = parse_db_url("postgresql://postgres.abc:pa/ss word@db.host.com:5432/postgres")
+    assert got == {
+        "user": "postgres.abc",
+        "password": "pa/ss word",
+        "host": "db.host.com",
+        "port": 5432,
+        "dbname": "postgres",
+    }
+
+
+def test_포트가_없으면_5432다():
+    from collector.db import parse_db_url
+
+    assert parse_db_url("postgresql://u:p@h.com/postgres")["port"] == 5432
+
+
+def test_형식이_아니면_거부한다():
+    import pytest
+
+    from collector.db import parse_db_url
+
+    with pytest.raises(ValueError):
+        parse_db_url("mysql://u:p@h/db")
