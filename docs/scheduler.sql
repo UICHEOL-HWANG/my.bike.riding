@@ -41,13 +41,24 @@ create or replace function ttareungi_ingest() returns int
 language plpgsql security definer set search_path = public, net as $fn$
 declare
   r record; v_json jsonb; v_code text; v_rows int; v_total int := 0;
+  v_rows_json jsonb;
 begin
   for r in
-    select cr.request_id, cr.captured_at, resp.status_code, resp.content, resp.created
+    select cr.request_id, cr.captured_at, cr.source,
+           resp.status_code, resp.content, resp.created
       from collector_request cr
       join net._http_response resp on resp.id = cr.request_id
      where cr.processed_at is null order by cr.captured_at
   loop
+    -- 본문이 비어 오면 API 응답이 아니라 전송 실패다. 이걸 'API 에러'로
+    -- 뭉뚱그리면 진짜 에러와 구분이 안 된다.
+    if r.content is null or btrim(r.content) = '' then
+      update collector_request set processed_at = now(),
+             note = format('빈 응답 (status=%s)', coalesce(r.status_code::text, '없음'))
+       where request_id = r.request_id;
+      continue;
+    end if;
+
     -- 인증 실패 등은 JSON이 아니라 XML로 온다. 여기서 죽으면 이후 요청까지
     -- 영영 처리되지 않으므로 반드시 삼키고 기록만 남긴다.
     begin
@@ -64,8 +75,13 @@ begin
     -- 코드가 세 자리 중 어디에든 올 수 있다. 정상 응답은 rentBikeStatus
     -- 안에, 데이터 없는 페이지는 최상위에 바로 CODE를 담아 온다.
     v_code := coalesce(v_json -> 'rentBikeStatus' -> 'RESULT' ->> 'CODE',
+                       v_json -> 'getStationListHist' -> 'RESULT' ->> 'CODE',
                        v_json -> 'RESULT' ->> 'CODE',
                        v_json ->> 'CODE');
+
+    -- 실시간과 백필이 봉투 이름만 다르고 필드는 같다. 한 함수로 처리한다.
+    v_rows_json := coalesce(v_json -> 'rentBikeStatus' -> 'row',
+                            v_json -> 'getStationListHist' -> 'row');
 
     -- 대여소 수가 페이지 경계에 딱 걸리면 마지막 페이지가 INFO-200으로
     -- 온다. 실패가 아니라 빈 페이지다 — 파이썬 경로와 같은 판정.
@@ -85,15 +101,20 @@ begin
     end if;
 
     insert into station_snapshot
-      (captured_at, fetched_at, station_id, parking_cnt, rack_total, shared)
-    select r.captured_at, r.created, e ->> 'stationId',
+      (captured_at, fetched_at, station_id, parking_cnt, rack_total, shared, source)
+    -- 백필은 방금 받아왔어도 그 시각의 기록이다. fetched_at에 수신 시각을
+    -- 넣으면 수신 지연 통계가 오염되므로 captured_at과 같게 둔다.
+    select r.captured_at,
+           case when r.source = 'hist' then r.captured_at else r.created end,
+           e ->> 'stationId',
            case when e ->> 'parkingBikeTotCnt' ~ '^-?\d+$'
                 then (e ->> 'parkingBikeTotCnt')::int end,
            case when e ->> 'rackTotCnt' ~ '^-?\d+$'
                 then (e ->> 'rackTotCnt')::int end,
            case when e ->> 'shared' ~ '^-?\d+$'
-                then (e ->> 'shared')::int end
-      from jsonb_array_elements(v_json -> 'rentBikeStatus' -> 'row') as e
+                then (e ->> 'shared')::int end,
+           r.source
+      from jsonb_array_elements(v_rows_json) as e
      where e ->> 'stationId' in (select station_id from collector_station)
     on conflict (station_id, captured_at) do nothing;
     get diagnostics v_rows = row_count;
@@ -107,7 +128,7 @@ begin
            case when e ->> 'stationLongitude' ~ '^-?\d+(\.\d+)?$'
                 then (e ->> 'stationLongitude')::double precision end,
            r.created
-      from jsonb_array_elements(v_json -> 'rentBikeStatus' -> 'row') as e
+      from jsonb_array_elements(v_rows_json) as e
      where e ->> 'stationId' in (select station_id from collector_station)
     on conflict (station_id) do update
        set name = excluded.name, lat = excluded.lat,
@@ -118,5 +139,61 @@ begin
     v_total := v_total + v_rows;
   end loop;
   return v_total;
+end
+$fn$;
+
+-- 백필: 결측 시각만 골라 bikeListHist로 메운다 ------------------------
+--
+-- 7일 창은 하루가 지날 때마다 하루씩 사라진다. 수집이 몇 시간 끊겨도
+-- 다음 실행에서 정시 지점이 자동으로 메워진다. 설계 문서가 걱정했던
+-- "실패가 조용히 방치되는" 상황에 대한 안전망이다.
+--
+-- 시간 단위라 10분 격자는 복원하지 못한다. 정시만 메운다.
+create or replace function ttareungi_backfill(p_hours int default 48,
+                                              p_max_hours int default 12)
+returns int
+language plpgsql security definer set search_path = public, vault, net as $fn$
+declare
+  v_key text; v_id bigint; v_start int; v_n int := 0; v_hour timestamptz;
+begin
+  select decrypted_secret into v_key
+    from vault.decrypted_secrets where name = 'seoul_api_key';
+  if v_key is null or v_key = '' then
+    raise exception 'vault에 seoul_api_key가 없다';
+  end if;
+
+  -- 이미 채운 시각은 건너뛴다. 48시간을 매번 다시 받으면 낭비다.
+  --
+  -- "시각이 존재하는가"가 아니라 "대여소가 다 왔는가"로 판정한다. 4페이지
+  -- 중 하나만 실패하면 일부 대여소만 들어오는데, 시각 존재로만 보면 그
+  -- 반쪽 데이터가 영영 재시도되지 않고 조용히 남는다.
+  for v_hour in
+    select t from (
+      -- 최근 2시간은 뺀다. 실시간 수집이 아직 채우는 중인 시각을 결측으로
+      -- 보면 매번 불필요한 요청이 나가고, bikeListHist에도 현재 시각
+      -- 기록이 아직 없을 수 있다.
+      select generate_series(
+               date_trunc('hour', now()) - make_interval(hours => p_hours),
+               date_trunc('hour', now()) - interval '2 hours',
+               interval '1 hour') as t) g
+     where (select count(*) from station_snapshot s where s.captured_at = g.t)
+           < (select count(*) from collector_station)
+     order by t
+     limit p_max_hours
+  loop
+    -- stationDt는 KST다. 실측 대조로 확인했다 — UTC로 넘기면 9시간
+    -- 어긋난 데이터가 들어간다.
+    for v_start in 1..3001 by 1000 loop
+      select net.http_get(
+               'http://openapi.seoul.go.kr:8088/' || v_key || '/json/bikeListHist/'
+               || v_start || '/' || (v_start + 999) || '/'
+               || to_char(v_hour at time zone 'Asia/Seoul', 'YYYYMMDDHH24'),
+               timeout_milliseconds := 25000) into v_id;
+      insert into collector_request(request_id, captured_at, source)
+        values (v_id, v_hour, 'hist');
+    end loop;
+    v_n := v_n + 1;
+  end loop;
+  return v_n;
 end
 $fn$;
