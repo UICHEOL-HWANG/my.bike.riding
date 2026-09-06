@@ -1,0 +1,42 @@
+# 본인 이용내역을 주 1회 수집한다.
+#
+# 재고 수집(pg_cron)과 달리 브라우저가 필요해서 여기서 돈다. requests로는
+# 서버가 연결을 끊는다 — 탐지를 회피하는 대신 진짜 브라우저를 쓴다.
+#
+# 주 1회라 Actions cron의 약점이 문제가 되지 않는다. 재고 수집이 */10에서
+# 발화율 3%로 실패했던 건 하루 144번 떠야 했기 때문이고, GitHub은 고빈도
+# 스케줄을 후순위로 민다. 몇 시간 늦게 떠도 이 작업엔 아무 상관이 없다 —
+# 이용내역은 계정에 남아 사라지지 않는다.
+#
+# 주의: public 저장소의 스케줄 워크플로는 60일 무활동 시 자동 비활성화된다.
+# GitHub이 사전에 메일로 알려주므로 그때 다시 켜면 된다.
+name: rides
+
+on:
+  schedule:
+    # 일요일 03:00 UTC = 12:00 KST
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+jobs:
+  rides:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # playwright가 dev 의존성이라 --no-dev를 쓰지 않는다.
+      - run: uv sync --frozen
+
+      - run: uv run playwright install --with-deps chromium
+
+      - run: uv run python scripts/fetch_my_rides.py
+        env:
+          BIKESEOUL_ID: ${{ secrets.BIKESEOUL_ID }}
+          BIKESEOUL_PW: ${{ secrets.BIKESEOUL_PW }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
