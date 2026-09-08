@@ -30,7 +30,8 @@ begin
              'http://openapi.seoul.go.kr:8088/' || v_key || '/json/bikeList/'
              || v_start || '/' || (v_start + 999) || '/',
              timeout_milliseconds := 25000) into v_id;
-    insert into collector_request(request_id, captured_at) values (v_id, v_cap);
+    insert into collector_request(request_id, captured_at, page_start)
+      values (v_id, v_cap, v_start);
     v_n := v_n + 1;
   end loop;
   return v_n;
@@ -38,13 +39,13 @@ end
 $fn$;
 
 create or replace function ttareungi_ingest() returns int
-language plpgsql security definer set search_path = public, net as $fn$
+language plpgsql security definer set search_path = public, vault, net as $fn$
 declare
   r record; v_json jsonb; v_code text; v_rows int; v_total int := 0;
-  v_rows_json jsonb;
+  v_rows_json jsonb; v_key text; v_retry_id bigint;
 begin
   for r in
-    select cr.request_id, cr.captured_at, cr.source,
+    select cr.request_id, cr.captured_at, cr.source, cr.page_start, cr.retry_of,
            resp.status_code, resp.content, resp.created
       from collector_request cr
       join net._http_response resp on resp.id = cr.request_id
@@ -53,8 +54,39 @@ begin
     -- 본문이 비어 오면 API 응답이 아니라 전송 실패다. 이걸 'API 에러'로
     -- 뭉뚱그리면 진짜 에러와 구분이 안 된다.
     if r.content is null or btrim(r.content) = '' then
+      -- 한 페이지가 비어 오면 그 페이지에 있던 대여소만 통째로 빠진다.
+      -- 실시간은 정시가 아닌 격자(:10, :20 …)도 만들어서 bikeListHist로
+      -- 복구할 수 없다 — 그 자리에서 다시 던지는 게 유일한 기회다.
+      --
+      -- 같은 10분 창 안에서만, 한 번만 재시도한다. 창을 넘기면 다른 시각의
+      -- 재고를 이 격자에 넣는 셈이 되고, 무한 재시도는 장애를 키운다.
+      if r.source = 'realtime'
+         and r.retry_of is null
+         and r.page_start is not null
+         and now() < r.captured_at + interval '10 minutes'
+      then
+        select decrypted_secret into v_key
+          from vault.decrypted_secrets where name = 'seoul_api_key';
+        if v_key is not null and v_key <> '' then
+          select net.http_get(
+                   'http://openapi.seoul.go.kr:8088/' || v_key || '/json/bikeList/'
+                   || r.page_start || '/' || (r.page_start + 999) || '/',
+                   timeout_milliseconds := 25000) into v_retry_id;
+          insert into collector_request(request_id, captured_at, source,
+                                        page_start, retry_of)
+            values (v_retry_id, r.captured_at, r.source, r.page_start, r.request_id);
+          update collector_request set processed_at = now(),
+                 note = format('빈 응답 (status=%s) → 재시도 %s',
+                               coalesce(r.status_code::text, '없음'), v_retry_id)
+           where request_id = r.request_id;
+          continue;
+        end if;
+      end if;
+
       update collector_request set processed_at = now(),
-             note = format('빈 응답 (status=%s)', coalesce(r.status_code::text, '없음'))
+             note = format('빈 응답 (status=%s)%s',
+                           coalesce(r.status_code::text, '없음'),
+                           case when r.retry_of is not null then ' (재시도분)' else '' end)
        where request_id = r.request_id;
       continue;
     end if;
@@ -189,8 +221,8 @@ begin
                || v_start || '/' || (v_start + 999) || '/'
                || to_char(v_hour at time zone 'Asia/Seoul', 'YYYYMMDDHH24'),
                timeout_milliseconds := 25000) into v_id;
-      insert into collector_request(request_id, captured_at, source)
-        values (v_id, v_hour, 'hist');
+      insert into collector_request(request_id, captured_at, source, page_start)
+        values (v_id, v_hour, 'hist', v_start);
     end loop;
     v_n := v_n + 1;
   end loop;
