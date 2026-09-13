@@ -45,7 +45,7 @@ declare
   v_rows_json jsonb; v_key text; v_retry_id bigint;
 begin
   for r in
-    select cr.request_id, cr.captured_at, cr.source, cr.page_start, cr.retry_of,
+    select cr.request_id, cr.captured_at, cr.source, cr.page_start, cr.attempt,
            resp.status_code, resp.content, resp.created
       from collector_request cr
       join net._http_response resp on resp.id = cr.request_id
@@ -60,8 +60,13 @@ begin
       --
       -- 같은 10분 창 안에서만, 한 번만 재시도한다. 창을 넘기면 다른 시각의
       -- 재고를 이 격자에 넣는 셈이 되고, 무한 재시도는 장애를 키운다.
+      -- 재시도를 2회까지 허용한다. 1회로는 부족했다 — 2026-09-10 01:10과
+      -- 01:20이 재시도분마저 비어서 2/14로 남았다.
+      --
+      -- 간격은 자연히 벌어진다. 재시도 요청은 다음 ingest(매분)에서
+      -- 처리되므로 시도 사이가 약 1분이고, 10분 창 안에 넉넉히 들어간다.
       if r.source = 'realtime'
-         and r.retry_of is null
+         and r.attempt < 2
          and r.page_start is not null
          and now() < r.captured_at + interval '10 minutes'
       then
@@ -73,11 +78,13 @@ begin
                    || r.page_start || '/' || (r.page_start + 999) || '/',
                    timeout_milliseconds := 25000) into v_retry_id;
           insert into collector_request(request_id, captured_at, source,
-                                        page_start, retry_of)
-            values (v_retry_id, r.captured_at, r.source, r.page_start, r.request_id);
+                                        page_start, retry_of, attempt)
+            values (v_retry_id, r.captured_at, r.source, r.page_start,
+                    r.request_id, r.attempt + 1);
           update collector_request set processed_at = now(),
-                 note = format('빈 응답 (status=%s) → 재시도 %s',
-                               coalesce(r.status_code::text, '없음'), v_retry_id)
+                 note = format('빈 응답 (status=%s) → 재시도 %s (%s회차)',
+                               coalesce(r.status_code::text, '없음'),
+                               v_retry_id, r.attempt + 1)
            where request_id = r.request_id;
           continue;
         end if;
@@ -86,7 +93,9 @@ begin
       update collector_request set processed_at = now(),
              note = format('빈 응답 (status=%s)%s',
                            coalesce(r.status_code::text, '없음'),
-                           case when r.retry_of is not null then ' (재시도분)' else '' end)
+                           case when r.attempt > 0
+                                then format(' (%s회차 재시도분, 포기)', r.attempt)
+                                else '' end)
        where request_id = r.request_id;
       continue;
     end if;
