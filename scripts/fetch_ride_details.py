@@ -16,7 +16,12 @@ from playwright.sync_api import sync_playwright
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from collector.my_ride import fetch_detail_via_page  # noqa: E402
+from collector.my_ride import (  # noqa: E402
+    LoginPageUnavailable,
+    LoginRejected,
+    fetch_detail_via_page,
+    login_with_retry,
+)
 from collector.store import make_client  # noqa: E402
 
 LOGIN = "https://www.bikeseoul.com/login.do"
@@ -53,13 +58,11 @@ def main() -> int:
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page(locale="ko-KR")
-        page.goto(LOGIN, wait_until="domcontentloaded")
-        page.fill("#memid", os.environ["BIKESEOUL_ID"])
-        page.fill("#mempw", os.environ["BIKESEOUL_PW"])
-        with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
-            page.evaluate("loginSubmit()")
-        if "login.do" in page.url:
-            print("[실패] 로그인 거부됨")
+        try:
+            login_with_retry(page, os.environ.get("BIKESEOUL_ID", ""),
+                             os.environ.get("BIKESEOUL_PW", ""))
+        except (LoginRejected, LoginPageUnavailable) as exc:
+            print(f"[실패] {exc}")
             browser.close()
             return 1
         print("[로그인] 성공")

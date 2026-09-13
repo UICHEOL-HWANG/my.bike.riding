@@ -21,7 +21,13 @@ from playwright.sync_api import sync_playwright
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
-from collector.my_ride import fetch_all_via_page  # noqa: E402
+from collector.my_ride import (  # noqa: E402
+    NAV_TIMEOUT,
+    LoginPageUnavailable,
+    LoginRejected,
+    fetch_all_via_page,
+    login_with_retry,
+)
 from collector.store import make_client, upsert_rides  # noqa: E402
 
 LOGIN = "https://www.bikeseoul.com/login.do"
@@ -43,34 +49,29 @@ def main() -> int:
         browser = p.chromium.launch(headless="--show" not in sys.argv)
         page = browser.new_page(locale="ko-KR")
 
-        page.goto(LOGIN, wait_until="domcontentloaded")
-
-        # 로그인 폼이 없으면 우리가 아는 그 페이지가 아니다. 차단 페이지나
-        # 점검 안내일 수 있는데, "요소를 못 찾았다"는 타임아웃만으로는
-        # 무엇이 왔는지 알 수 없다. 실제로 받은 것을 남긴다.
-        if page.query_selector("#memid") is None:
-            body = page.inner_text("body")[:600].replace("\n", " | ")
-            print(f"[진단] 로그인 폼 없음")
-            print(f"  URL   : {page.url}")
-            print(f"  제목  : {page.title()}")
-            print(f"  크기  : {len(page.content())} bytes")
-            print(f"  본문  : {body}")
-            page.screenshot(path="login_page.png", full_page=True)
-            print("  스크린샷: login_page.png")
+        try:
+            login_with_retry(page, user, pw)
+        except LoginRejected as exc:
+            # 재시도하지 않는다 — 반복하면 계정이 잠긴다.
+            print(f"[실패] {exc} .env의 BIKESEOUL_PW를 확인할 것.")
             browser.close()
             return 1
-
-        page.fill("#memid", user)
-        page.fill("#mempw", pw)
-        with page.expect_navigation(wait_until="domcontentloaded", timeout=20000):
-            page.evaluate("loginSubmit()")
-        if "login.do" in page.url:
-            print(f"[실패] 로그인 거부됨 -> {page.url}")
+        except LoginPageUnavailable as exc:
+            # 무엇을 받았는지 남긴다. "타임아웃"만으로는 차단인지 개편인지
+            # 점검인지 알 수 없다.
+            print(f"[실패] {exc}")
+            print(f"  URL   : {page.url}")
+            try:
+                shot = pathlib.Path(os.environ.get("RIDES_DUMP", "/tmp/rides_latest.json")).parent / "login_fail.png"
+                page.screenshot(path=str(shot), full_page=True)
+                print(f"  스크린샷: {shot}")
+            except Exception:  # noqa: BLE001 - 진단 실패가 본 실패를 가리면 안 된다
+                pass
             browser.close()
             return 1
         print(f"[로그인] 성공 -> {page.url}")
 
-        page.goto(HISTORY, wait_until="domcontentloaded")
+        page.goto(HISTORY, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
         if "login.do" in page.url:
             print("[실패] 내역 페이지 접근 불가")
             browser.close()

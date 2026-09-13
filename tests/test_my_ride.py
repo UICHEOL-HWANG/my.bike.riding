@@ -177,3 +177,148 @@ def test_추가과금에_쉼표가_있어도_읽는다():
     from collector.my_ride import parse_detail
 
     assert parse_detail("추가과금\t1,200")["extra_fee"] == 1200
+
+
+# --- 로그인 재시도 ------------------------------------------------------
+
+class FakePage:
+    """goto/fill/evaluate를 흉내낸다. 시나리오대로 실패시킨다."""
+
+    def __init__(self, *, goto_fails=0, has_form=True, nav_fails=0, final_url="https://www.bikeseoul.com/main.do"):
+        self.goto_fails = goto_fails
+        self.has_form = has_form
+        self.nav_fails = nav_fails
+        self.final_url = final_url
+        self.url = "https://www.bikeseoul.com/login.do"
+        self.attempts = 0
+        self.filled = []
+
+    def goto(self, url, **kw):
+        self.attempts += 1
+        if self.goto_fails > 0:
+            self.goto_fails -= 1
+            raise RuntimeError("net::ERR_CONNECTION_RESET")
+        self.url = url
+
+    def query_selector(self, sel):
+        return object() if self.has_form else None
+
+    def content(self):
+        return "<html></html>"
+
+    def fill(self, sel, val):
+        self.filled.append(sel)
+
+    def expect_navigation(self, **kw):
+        page = self
+
+        class Ctx:
+            def __enter__(self): return self
+            def __exit__(self, *a):
+                if page.nav_fails > 0:
+                    page.nav_fails -= 1
+                    raise TimeoutError("navigation timeout")
+                page.url = page.final_url
+                return False
+        return Ctx()
+
+    def wait_for_function(self, expr, **kw):
+        return None
+
+    def evaluate(self, expr, *a):
+        return None
+
+
+def _no_sleep(_):
+    pass
+
+
+def test_로그인_성공():
+    from collector.my_ride import login_with_retry
+
+    page = FakePage()
+    login_with_retry(page, "id", "pw", sleep=_no_sleep)
+    assert page.url.endswith("main.do")
+    assert page.attempts == 1
+
+
+def test_일시적_연결끊김은_재시도한다():
+    # 2026-09-13 첫 예약 실행이 이것 때문에 실패했다. 같은 구성이 곧바로
+    # 다시 하면 성공하는 것을 실측으로 확인했다.
+    from collector.my_ride import login_with_retry
+
+    page = FakePage(goto_fails=2)
+    login_with_retry(page, "id", "pw", waits=(0, 0, 0), sleep=_no_sleep)
+    assert page.attempts == 3
+    assert page.url.endswith("main.do")
+
+
+def test_네비게이션_타임아웃도_재시도한다():
+    from collector.my_ride import login_with_retry
+
+    page = FakePage(nav_fails=1)
+    login_with_retry(page, "id", "pw", waits=(0, 0, 0), sleep=_no_sleep)
+    assert page.attempts == 2
+
+
+def test_자격증명_거부는_재시도하지_않는다():
+    # 재시도하면 계정이 잠긴다. 한 번만 시도하고 즉시 올려야 한다.
+    from collector.my_ride import LoginRejected, login_with_retry
+
+    page = FakePage(final_url="https://www.bikeseoul.com/login.do?error=1")
+    with pytest.raises(LoginRejected):
+        login_with_retry(page, "id", "pw", waits=(0, 0, 0), sleep=_no_sleep)
+    assert page.attempts == 1
+
+
+def test_빈_자격증명은_거부로_본다():
+    from collector.my_ride import LoginRejected, login_with_retry
+
+    with pytest.raises(LoginRejected):
+        login_with_retry(FakePage(), "", "pw", sleep=_no_sleep)
+
+
+def test_재시도를_다_쓰면_포기한다():
+    from collector.my_ride import LoginPageUnavailable, login_with_retry
+
+    page = FakePage(goto_fails=99)
+    with pytest.raises(LoginPageUnavailable):
+        login_with_retry(page, "id", "pw", waits=(0, 0), sleep=_no_sleep)
+    assert page.attempts == 3
+
+
+def test_로그인_폼이_없으면_재시도한다():
+    # 차단 페이지도 일시적일 수 있다. 다만 끝내 없으면 진단을 남기고 끝낸다.
+    from collector.my_ride import LoginPageUnavailable, login_with_retry
+
+    page = FakePage(has_form=False)
+    with pytest.raises(LoginPageUnavailable):
+        login_with_retry(page, "id", "pw", waits=(0,), sleep=_no_sleep)
+    assert page.attempts == 2
+
+
+def test_스크립트가_준비될_때까지_기다린다():
+    # domcontentloaded는 jQuery 로딩 전에 끝난다. 기다리지 않고 loginSubmit()을
+    # 부르면 "$ is not defined"로 터지고, 이동이 없어 타임아웃으로 위장된다.
+    from collector.my_ride import login_with_retry
+
+    page = FakePage()
+    waited = []
+    page.wait_for_function = lambda expr, **kw: waited.append(expr)
+    login_with_retry(page, "id", "pw", sleep=_no_sleep)
+    assert len(waited) == 1
+    assert "loginSubmit" in waited[0] and "$" in waited[0]
+
+
+def test_스크립트가_끝내_안_뜨면_재시도한다():
+    from collector.my_ride import LoginPageUnavailable, login_with_retry
+
+    page = FakePage()
+
+    def boom(expr, **kw):
+        raise TimeoutError("wait_for_function timeout")
+
+    page.wait_for_function = boom
+    with pytest.raises(LoginPageUnavailable):
+        login_with_retry(page, "id", "pw", waits=(0,), sleep=_no_sleep)
+    assert page.attempts == 2

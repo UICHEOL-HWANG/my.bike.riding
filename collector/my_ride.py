@@ -9,6 +9,8 @@
 """
 
 import re
+import sys
+import time
 from datetime import date, timedelta
 from typing import Iterator
 
@@ -212,3 +214,71 @@ def fetch_detail_via_page(page, history_url: str, seq: str) -> dict:
             [seq, DETAIL_PATH],
         )
     return parse_detail(page.inner_text("body"))
+
+
+# --- 로그인 ------------------------------------------------------------
+# 사이트가 산발적으로 연결을 끊는다(ERR_CONNECTION_RESET). 같은 구성이
+# 곧바로 다시 하면 성공하는 것을 확인했으므로 하드 차단이 아니라 일시적이다.
+#
+# 주 1회만 도는 작업이라 리셋 한 번에 한 주를 통째로 날린다. 실제로
+# 2026-09-13 첫 예약 실행이 이것 때문에 실패했다.
+
+LOGIN_URL = f"{BASE}/login.do"
+NAV_TIMEOUT = 30000
+LOGIN_RETRY_WAITS = (5, 15, 30)
+
+
+class LoginRejected(Exception):
+    """자격증명이 거부됐다. 재시도해도 같고, 반복하면 계정이 잠긴다."""
+
+
+class LoginPageUnavailable(Exception):
+    """로그인 페이지를 받지 못했다. 일시적일 수 있어 재시도 대상이다."""
+
+
+def login_with_retry(page, user_id: str, password: str, *,
+                     waits=LOGIN_RETRY_WAITS, sleep=time.sleep) -> None:
+    """로그인한다. 일시적 실패만 재시도하고 자격증명 거부는 즉시 올린다.
+
+    둘을 구분하지 않으면 비밀번호가 틀렸을 때 재시도가 계정 잠금을 부른다.
+    """
+    if not user_id or not password:
+        raise LoginRejected("BIKESEOUL_ID / BIKESEOUL_PW가 비어 있다.")
+
+    last: Exception | None = None
+    for wait in (*waits, None):
+        try:
+            page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=NAV_TIMEOUT)
+            if page.query_selector("#memid") is None:
+                raise LoginPageUnavailable(
+                    f"로그인 폼이 없다 (URL={page.url}, {len(page.content())}bytes)")
+            # domcontentloaded는 외부 스크립트(jQuery) 로딩 전에 끝난다.
+            # 그 상태에서 loginSubmit()을 부르면 "$ is not defined"로 터지고,
+            # 예외 탓에 페이지 이동이 안 일어나 expect_navigation이 타임아웃한다.
+            # 2026-09-13 첫 예약 실행이 정확히 이것 때문에 실패했다.
+            page.wait_for_function(
+                "typeof $ !== 'undefined' && typeof loginSubmit === 'function'",
+                timeout=NAV_TIMEOUT)
+            page.fill("#memid", user_id)
+            page.fill("#mempw", password)
+            with page.expect_navigation(wait_until="domcontentloaded", timeout=NAV_TIMEOUT):
+                page.evaluate("loginSubmit()")
+            if "login.do" in page.url:
+                # 스프링 시큐리티는 실패 시 로그인 폼으로 되돌린다. 성공은
+                # main.do로 간다 — 실측으로 확인했다.
+                raise LoginRejected("아이디/비밀번호가 거부됐다.")
+            return
+        except LoginRejected:
+            raise
+        except Exception as exc:  # noqa: BLE001 - playwright 예외 타입을 특정하지 않는다
+            last = exc
+            if wait is None:
+                break
+            # 조용히 재시도하면 서서히 나빠지는 사이트가 건강한 사이트처럼
+            # 보인다. 예외 타입만 남긴다 — 메시지에 자격증명이 섞일 수 있다.
+            print(f"  로그인 실패({type(exc).__name__}), {wait}초 후 재시도",
+                  file=sys.stderr)
+            sleep(wait)
+
+    kind = type(last).__name__ if last is not None else "알 수 없음"
+    raise LoginPageUnavailable(f"로그인이 재시도 후에도 실패했다: {kind}")
